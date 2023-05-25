@@ -121,7 +121,6 @@ flipper_box <- ggplot(data = penguins, aes(x = species, y = flipper_length_mm)) 
 flipper_box
 
 
-
 ```
 
 ## Getting any tibble into the right form for neural network
@@ -367,10 +366,6 @@ final <- as_tibble(expand.grid(`First layer`=c(1,2,3),`Second layer`=c(1,2,3),
   
   
 }
-
-
-
-
 
 ```
 
