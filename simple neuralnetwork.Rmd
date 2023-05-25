@@ -1,0 +1,376 @@
+---
+title: "Simple Neural Network"
+author: "Hishma Malik"
+date: "19/01/2022"
+output: pdf_document
+---
+---
+title: "Simple Neural Network"
+author: "Hishma Malik"
+date: "25/11/2021"
+output: pdf_document
+---
+
+
+## Introduction
+
+Neural networks have become a popular tool for analyzing datasets where the goal
+is to develop a complex prediction model which takes a set of input features and
+tries to predict the result of an outcome (or target) variable. These models 
+work well in situations where the relationship between the input features and 
+the outcome variable is highly nonlinear.
+
+The basic structure of a neural network is as follows:
+1) We assume a set of K input features.
+2) We choose a number of hidden (unobserved) layers.
+3) For each layer, we choose a number of nodes.
+4) The inputs, layers, and outcome are connected by edges which have weights 
+which need to be estimated.
+5) Every node also has its own bias node that is used to help adjust the linear 
+combinations to improve prediction (similar to an intercept term in linear 
+regression).
+6) Each node in each hidden layer contains a linear combination of values of 
+previous nodes that then gets passed through the network to result in a 
+final prediction.
+
+Here we have an example of such a network for the palmerpenguins data, where we 
+try to predict the sex of the penguin from bill length and body mass. I use 
+this to create a set of functions step by step that will work with the data
+as a basis for creating a set of general functions.
+
+My goal is to create a set of functions that will do all required tasks for ANY 
+data set that contains a single outcome column and a set of possible input 
+features. 
+
+## Install packages 
+defaultW <- getOption("warn") 
+options(warn = -1) 
+
+```{r}
+
+library(tinytex)
+library(rmarkdown)
+library(knitr)
+library(tidyverse)
+library(tibble)
+library(here)
+library(lubridate)
+library(magrittr)
+library(neuralnet)
+library(palmerpenguins)
+
+```
+options(warn = defaultW)
+
+## Explore and explain data
+
+The palmerpenguins package contains two datasets. One is called penguins, and 
+is a simplified version of the raw data. This is  what I will use as a foundation.
+
+Penguins contains data for 344 penguins. There are 3 different species of
+penguins in this dataset, collected from 3 islands in the Palmer Archipelago, 
+Antarctica.
+
+
+```{r}
+head(penguins)
+
+mass_flipper <- ggplot(data = penguins,
+                       aes(x = flipper_length_mm,
+                           y = body_mass_g)) +
+  geom_point(aes(color = species,
+                 shape = species),
+             size = 3,
+             alpha = 0.8) +
+  theme_minimal() +
+  scale_color_manual(values = c("darkorange","purple","cyan4")) +
+  labs(title = "Penguin size, Palmer Station LTER",
+       subtitle = "Flipper length and body mass for Adelie, Chinstrap and Gentoo Penguins",
+       x = "Flipper length (mm)",
+       y = "Body mass (g)",
+       color = "Penguin species",
+       shape = "Penguin species") +
+  theme(legend.position = c(0.2, 0.7),
+        legend.background = element_rect(fill = "white", color = NA),
+        plot.title.position = "plot",
+        plot.caption = element_text(hjust = 0, face= "italic"),
+        plot.caption.position = "plot")
+
+mass_flipper
+
+flipper_hist <- ggplot(data = penguins, aes(x = flipper_length_mm)) +
+  geom_histogram(aes(fill = species),
+                 alpha = 0.5,
+                 position = "identity") +
+  scale_fill_manual(values = c("darkorange","purple","cyan4")) +
+  theme_minimal() +
+  labs(x = "Flipper length (mm)",
+       y = "Frequency",
+       title = "Penguin flipper lengths")
+
+flipper_hist
+
+flipper_box <- ggplot(data = penguins, aes(x = species, y = flipper_length_mm)) +
+  geom_boxplot(aes(color = species), width = 0.3, show.legend = FALSE) +
+  geom_jitter(aes(color = species), alpha = 0.5, show.legend = FALSE, position = position_jitter(width = 0.2, seed = 0)) +
+  scale_color_manual(values = c("darkorange","purple","cyan4")) +
+  theme_minimal() +
+  labs(x = "Species",
+       y = "Flipper length (mm)")
+
+flipper_box
+
+
+
+```
+
+## Getting any tibble into the right form for neural network
+
+Given the tibble we start with, I will create a function that takes
+
+1) A data frame or tibble
+2) A length 1 character vector indicating the name of the outcome column in the 
+dataset.
+3) A character vector of unspecified length containing the names of the input 
+features to be selected and scaled
+
+and returns a new data set which contains a tibble containing only the outcome 
+vector which should be renamed outcome and the scaled feature vectors, each of 
+which has been scaled using the scale function.
+
+Note: 
+
+The length of the vector of the hidden argument vector is the number of hidden 
+layers. The value of each element of the hidden argument vector is the number 
+of hidden nodes in that respective layer so hidden=c(a,b) means 2 hidden layers 
+with a nodes in the first layer and b nodes in the second layer.
+
+The two input features need to be scaled to have average value 0 and standard 
+deviation 1 in order to use the neuralnet function to fit the models without 
+lots of extra work.
+
+
+
+```{r}
+
+first_function <- function(adf, outcome, inputs){
+  
+  result <- adf[, c(outcome, inputs)] %>% drop_na %>%    
+  mutate_at(~scale(.),.vars=vars(inputs)) %>% rename(outcome=sex)
+  
+  return(result)
+}
+
+# test on penguins data 
+
+penguins_example <- penguins %>% drop_na %>% # adjust data since ours doesn't
+  mutate(sex=ifelse(sex=="female",1,0))
+
+test1 <- first_function(penguins_example, c("sex"), 
+                        c("body_mass_g", "bill_length_mm"))
+head(test1)
+
+```
+
+I will use this for the rest of project.
+
+## Create Training Testing Split Function
+
+Since the neural network error generally tends to be under-estimated (because of 
+optimization of  weights) I will now split our data into a training sample 
+and a test sample to evaluate the error independently from our estimated weights. 
+
+I will do this by writing a function to randomly split any data frame/tibble into 
+training and test that will take two arguments:
+1) The data frame or tibble
+2) The percentage of the total number of rows that should be from training
+and returns a list which has two elements, one that is the Training data and 
+the other is the Test data.
+
+I will demonstrate that your function works by running it on the tibble that I 
+generated in the last part with training fraction equal to 0.7.
+
+```{r}
+
+# split df into training and test 
+
+sec_function <- function(adf,perc){
+  
+  # in case percentage is not divided by 100 by user 
+  
+  if(perc>1){perc <- (perc/100)}
+  else{perc <-perc}
+    
+  # split the data 
+  split_adf <- sample(c("Training", "Test"), prob = c(perc, (1-perc)), 
+                      replace=T, size=nrow(adf))
+       
+  # create training data and test data 
+  
+  training_sample <- adf %>% filter(split_adf=="Training")
+  
+  testing_sample <- adf %>% filter(split_adf=="Test")
+  
+  
+  # return list with two elements (training and test data)
+  return(list(training_sample, testing_sample))
+  
+}
+
+# test on penguins data 
+test2 <- sec_function(test1, 0.7 ) # also works if you input 70% 
+test2
+
+```
+
+
+## Fit the neural network
+
+Now I can fit the neural network to the training data and compute predictions 
+and average squared error for the training data.
+
+I will create a function that takes:
+1) A data frame or tibble formatted as above (with a column named outcome and 
+other columns that are all scaled feature vectors)
+2) A vector of integers that can be used as the hidden argument to the 
+neuralnet function, i.e. a list of numbers of nodes of the hidden layers of a 
+neural network
+
+to return a neuralnet object that is the result of running the neuralnet 
+function on the data frame/tibble with the hidden nodes specified from the 
+second argument and the following other arguments: 
+linear.output = FALSE,act.fct="logistic" and using the outcome variable as the 
+outcome in the formula argument. 
+I will show that my function works by running it on the Training Data that 
+I created above.
+
+Note: Setting linear.output=FALSE and using the logistic function 
+(argument of act.funct) converts the output of the neural network into a value 
+between 0 and 1 which can be interpreted as a probability. 
+
+
+```{r}
+
+third_function <- function(adf, vec){
+  
+  
+  result <- neuralnet(outcome~.,linear.output = FALSE, 
+            act.fct="logistic",data=adf, hidden=vec)
+}
+
+# training sample is first element of list from b
+test3 <- third_function(test2[[1]], c(2,2))
+
+
+# fitted neural network on test
+plot(test3, rep = "best")
+
+```
+## Explanation 
+
+Above, we can see the structure of the network when there are two hidden layers 
+and two hidden nodes per layer. The weights of the edges are in black, the blue 
+edges and nodes are the bias terms. The weights and bias terms are chosen to 
+minimize the sum of squared errors which is sum from i=1 to i= no.of units of the
+euation:  (yi - yihat !)^2
+where yi is the binary gender value for the penguin in row i of the data and
+y"i is the predicted probability from the neural network that this penguin in 
+row i has yi = 1. Other errors are possible in neuralnet , but I consider just 
+the default is for this project. 
+
+Note: A better measure is the average error per observation, which I will 
+compute later.
+
+
+## PART D
+
+Now I will compute the predictions and error for the test data.
+I will createa function that takes: 
+
+1) A neuralnet object
+2) A data frame/tibble containing Training Data
+3) A data frame/tibble containing Test Data
+
+and returns a vector containing the average training squared error and the 
+average test squared error using the neuralnet object to find the predictions. 
+
+
+```{r}
+
+
+
+fourth_function <- function(nnobj, df_train, df_test){
+  
+  # use predict function on neural net object for training
+  train_predict <- predict(nnobj,newdata=df_train)
+  
+  Training_Error <- df_train %>% 
+    mutate(train_error_sq=(outcome-train_predict)^2) %>% 
+    summarize(Avg1=mean(train_error_sq))
+
+  # use predict function on neural net object for testing
+  test_predict <- predict(nnobj,newdata=df_test)
+ 
+  Testing_Error <- df_test %>% mutate(test_error_sq=(outcome-test_predict)^2) %>%
+   summarize(Avg2 = mean(test_error_sq))
+
+  
+  return(c(Training_Error, Testing_Error)) 
+  #Training_Error
+  #Testing_Error
+}
+
+# from part b
+training_tibble <- test2[[1]]
+testing_tibble <- test2[[2]]
+testing_tibble
+test4 <- fourth_function(test3, training_tibble, testing_tibble)
+test4
+
+
+```
+
+## Integrate all above parts 
+
+Now I will write a function that takes the following arguments:
+1) A data frame or tibble
+2) A length 1 character vector indicating the name of the outcome column in the 
+dataset.
+3) A character vector of unspecified length containing the names of the input 
+features to be selected and scaled.
+4) The percentage of the total number of rows in the data/frame or tibble 
+that should be used in the training data.
+
+and returns a tibble where each row contains the Average Training and Average 
+Test squared error for fitting a two-layer neural network at all possible 
+combinations of numbers of hidden nodes at each layer (1 through 3). 
+
+Your returned tibble should look like this:
+
+as_tibble(expand.grid(`First layer`=c(1,2,3),`Second layer`=c(1,2,3), `Training Error
+ `=NA, `Test error`=NA))
+ 
+ where the NA’s are replaced with the values for your runs. 
+ 
+You can use the expand.grid function above to create a data.frame/tibble that you can iterate over the functions from parts (a) through (d). 
+Demonstrate that function works by running it on the penguins_example tibble from the Background section for the two features used in the Background, body_mass_g and bill_length_mm .
+
+```{r}
+
+final_function <- function(adf, outcome, inputs, trainingfraction){
+  
+  
+  # plug in training testing in place of NA using above funciton
+  
+final <- as_tibble(expand.grid(`First layer`=c(1,2,3),`Second layer`=c(1,2,3), 
+                               `Training Error`=NA, `Test error`=NA))
+  
+  
+}
+
+
+
+
+
+```
+
